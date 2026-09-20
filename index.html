@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#101418">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>D-MSPX Live Nav</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIINfQ3YNq7itN3CeiQO7QVAvsppvLLJQmI=" crossorigin="">
+  <style>
+    html, body, #map { height:100%; margin:0; }
+    body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#101418; overflow:hidden; }
+    #map { position:fixed; inset:0; z-index:1; }
+    .hud {
+      position:fixed; z-index:1000; left:10px; right:10px; top:max(10px, env(safe-area-inset-top));
+      display:grid; grid-template-columns:repeat(4,1fr); gap:6px;
+      padding:8px; border-radius:15px; background:rgba(10,14,18,.86); color:white;
+      box-shadow:0 4px 16px rgba(0,0,0,.35); backdrop-filter:blur(8px);
+    }
+    .cell { text-align:center; min-width:0; }
+    .label { font-size:10px; opacity:.68; letter-spacing:.08em; }
+    .value { font-size:21px; font-weight:750; white-space:nowrap; }
+    .unit { font-size:11px; opacity:.68; }
+    #bottom {
+      position:fixed; z-index:1000; left:10px; right:10px;
+      bottom:max(10px, env(safe-area-inset-bottom));
+      display:flex; gap:8px; align-items:center;
+    }
+    button {
+      border:0; border-radius:13px; padding:12px 14px; font-size:15px; font-weight:700;
+      background:rgba(10,14,18,.9); color:#fff; box-shadow:0 3px 12px rgba(0,0,0,.3);
+    }
+    button.primary { background:#0a6dff; }
+    button.active { background:#1d8b4c; }
+    #status {
+      flex:1; border-radius:13px; padding:11px 12px; background:rgba(255,255,255,.92);
+      color:#111; font-size:12px; line-height:1.2;
+    }
+    .plane {
+      width:42px; height:42px; display:flex; align-items:center; justify-content:center;
+      filter: drop-shadow(0 2px 3px rgba(0,0,0,.55));
+      transform-origin:50% 50%;
+    }
+    .plane svg { width:42px; height:42px; }
+    .leaflet-control-attribution { font-size:9px; }
+    .leaflet-control-zoom { margin-top:110px !important; }
+    #wpbox {
+      position:fixed; z-index:1000; right:10px; top:112px;
+      background:rgba(255,255,255,.93); border-radius:12px; padding:8px 10px;
+      color:#111; font-size:12px; display:none; box-shadow:0 3px 12px rgba(0,0,0,.25);
+      max-width:180px;
+    }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+
+<div class="hud">
+  <div class="cell"><div class="label">GS</div><div class="value" id="speed">--</div><div class="unit">kt</div></div>
+  <div class="cell"><div class="label">ALT GPS</div><div class="value" id="alt">--</div><div class="unit">ft</div></div>
+  <div class="cell"><div class="label">TRK</div><div class="value" id="trk">--</div><div class="unit">°</div></div>
+  <div class="cell"><div class="label">FLUGZEIT</div><div class="value" id="time">00:00</div><div class="unit">hh:mm</div></div>
+</div>
+
+<div id="wpbox"></div>
+
+<div id="bottom">
+  <button id="gps" class="primary">📍 GPS START</button>
+  <button id="center">🎯</button>
+  <button id="trackBtn">〰 SPUR</button>
+  <div id="status">Bereit · GPS braucht HTTPS und Standortfreigabe.</div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+const map = L.map('map', { zoomControl:true, preferCanvas:true }).setView([48.543, 9.916], 9);
+
+// Gelände-Grundkarte + OpenFlightMaps Luftfahrt-Overlay.
+// OFM stellt EPSG:3857 ("slippy") Tiles bereit.
+const base = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+  maxZoom:17,
+  attribution:'Map © OpenTopoMap / OSM'
+}).addTo(map);
+
+const ofm = L.tileLayer('https://nwy-tiles-api.prod.newaydata.com/tiles/{z}/{x}/{y}.png?path=latest/aero/latest', {
+  minZoom:7,
+  maxNativeZoom:13,
+  maxZoom:17,
+  opacity:0.93,
+  attribution:'© open flightmaps association'
+}).addTo(map);
+
+L.control.layers({"Topo":base},{"OpenFlightMaps":ofm},{collapsed:true}).addTo(map);
+
+const planeIcon = L.divIcon({
+  className:'',
+  iconSize:[42,42],
+  iconAnchor:[21,21],
+  html:`<div class="plane" id="planeRot"><svg viewBox="0 0 64 64" aria-label="Flugzeug">
+    <path d="M32 3 L39 25 L58 31 L58 36 L39 35 L36 55 L44 59 L44 62 L32 59 L20 62 L20 59 L28 55 L25 35 L6 36 L6 31 L25 25 Z"
+      fill="#ff9d00" stroke="#111" stroke-width="2"/>
+  </svg></div>`
+});
+
+let marker=null, accuracyCircle=null, watchId=null, trackLine=null;
+let trackPoints=[], tracking=true, follow=true, startTime=null, timerId=null;
+let lastLatLng=null, lastTrack=null, waypoint=null, wpMarker=null, wpLine=null;
+
+function fmt2(n){ return String(n).padStart(2,'0'); }
+function updateTimer(){
+  if(!startTime) return;
+  const s=Math.floor((Date.now()-startTime)/1000);
+  document.getElementById('time').textContent = `${fmt2(Math.floor(s/3600))}:${fmt2(Math.floor((s%3600)/60))}`;
+}
+function setStatus(t){ document.getElementById('status').textContent=t; }
+
+function haversineNM(a,b){
+  const R=3440.065, r=x=>x*Math.PI/180;
+  const dlat=r(b.lat-a.lat), dlon=r(b.lng-a.lng);
+  const p=Math.sin(dlat/2)**2+Math.cos(r(a.lat))*Math.cos(r(b.lat))*Math.sin(dlon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(p));
+}
+function bearing(a,b){
+  const r=x=>x*Math.PI/180, d=x=>(x*180/Math.PI+360)%360;
+  const y=Math.sin(r(b.lng-a.lng))*Math.cos(r(b.lat));
+  const x=Math.cos(r(a.lat))*Math.sin(r(b.lat))-Math.sin(r(a.lat))*Math.cos(r(b.lat))*Math.cos(r(b.lng-a.lng));
+  return d(Math.atan2(y,x));
+}
+function updateWaypoint(){
+  if(!waypoint || !lastLatLng) return;
+  const nm=haversineNM(lastLatLng,waypoint), brg=bearing(lastLatLng,waypoint);
+  document.getElementById('wpbox').style.display='block';
+  document.getElementById('wpbox').innerHTML=`<b>NEXT</b><br>${nm.toFixed(1)} NM · BRG ${Math.round(brg)}°<br><small>Tippen auf Karte = neuer Punkt</small>`;
+  if(wpLine) map.removeLayer(wpLine);
+  wpLine=L.polyline([lastLatLng, waypoint], {weight:3, dashArray:'8,8'}).addTo(map);
+}
+
+function onPosition(pos){
+  const c=pos.coords, ll=L.latLng(c.latitude,c.longitude);
+  lastLatLng=ll;
+  const spd = Number.isFinite(c.speed) ? c.speed*1.943844 : null;
+  const alt = Number.isFinite(c.altitude) ? c.altitude*3.28084 : null;
+  const trk = Number.isFinite(c.heading) ? c.heading : lastTrack;
+  if(Number.isFinite(c.heading)) lastTrack=c.heading;
+
+  document.getElementById('speed').textContent = spd===null?'--':Math.round(spd);
+  document.getElementById('alt').textContent = alt===null?'--':Math.round(alt);
+  document.getElementById('trk').textContent = trk==null?'--':Math.round(trk);
+
+  if(!marker) marker=L.marker(ll,{icon:planeIcon,zIndexOffset:1000}).addTo(map).bindTooltip('D-MSPX',{permanent:false});
+  else marker.setLatLng(ll);
+
+  const rot=document.getElementById('planeRot');
+  if(rot && trk!=null) rot.style.transform=`rotate(${trk}deg)`;
+
+  if(!accuracyCircle) accuracyCircle=L.circle(ll,{radius:c.accuracy||20,weight:1,fillOpacity:.05}).addTo(map);
+  else accuracyCircle.setLatLng(ll).setRadius(c.accuracy||20);
+
+  if(tracking){
+    trackPoints.push(ll);
+    if(!trackLine) trackLine=L.polyline(trackPoints,{weight:4,opacity:.85}).addTo(map);
+    else trackLine.setLatLngs(trackPoints);
+  }
+  if(follow) map.panTo(ll,{animate:true,duration:.25});
+  setStatus(`GPS aktiv · Genauigkeit ±${Math.round(c.accuracy||0)} m`);
+  updateWaypoint();
+}
+
+function onError(e){
+  const msg = e.code===1 ? 'Standort nicht erlaubt – Safari → Einstellungen → Standort freigeben.'
+            : e.code===2 ? 'GPS-Position derzeit nicht verfügbar.'
+            : 'GPS-Zeitüberschreitung.';
+  setStatus(msg);
+}
+
+document.getElementById('gps').onclick=()=>{
+  if(watchId!==null){
+    navigator.geolocation.clearWatch(watchId); watchId=null;
+    document.getElementById('gps').textContent='📍 GPS START';
+    document.getElementById('gps').classList.remove('active');
+    setStatus('GPS gestoppt.');
+    return;
+  }
+  if(!navigator.geolocation){ setStatus('Dieser Browser unterstützt GPS nicht.'); return; }
+  startTime = startTime || Date.now();
+  timerId = timerId || setInterval(updateTimer,1000);
+  watchId=navigator.geolocation.watchPosition(onPosition,onError,{
+    enableHighAccuracy:true, maximumAge:1000, timeout:10000
+  });
+  document.getElementById('gps').textContent='■ GPS STOP';
+  document.getElementById('gps').classList.add('active');
+  setStatus('GPS wird gestartet …');
+};
+
+document.getElementById('center').onclick=()=>{
+  follow=!follow;
+  document.getElementById('center').textContent=follow?'🎯':'🔓';
+  if(follow && lastLatLng) map.setView(lastLatLng, Math.max(map.getZoom(),11));
+};
+
+document.getElementById('trackBtn').onclick=()=>{
+  tracking=!tracking;
+  document.getElementById('trackBtn').textContent=tracking?'〰 SPUR':'SPUR AUS';
+};
+
+map.on('dragstart',()=>{ follow=false; document.getElementById('center').textContent='🔓'; });
+
+map.on('click',e=>{
+  waypoint=e.latlng;
+  if(wpMarker) map.removeLayer(wpMarker);
+  wpMarker=L.marker(waypoint,{draggable:true}).addTo(map).bindPopup('Wegpunkt<br><button onclick="clearWp()">Löschen</button>').openPopup();
+  wpMarker.on('drag',ev=>{ waypoint=ev.target.getLatLng(); updateWaypoint(); });
+  updateWaypoint();
+});
+
+window.clearWp=()=>{
+  waypoint=null;
+  if(wpMarker){ map.removeLayer(wpMarker); wpMarker=null; }
+  if(wpLine){ map.removeLayer(wpLine); wpLine=null; }
+  document.getElementById('wpbox').style.display='none';
+};
+
+if('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(()=>{});
+</script>
+</body>
+</html>
