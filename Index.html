@@ -1,0 +1,39 @@
+<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no"><title>D-MSPX Live Nav V2</title><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><style>
+html,body,#map{height:100%;margin:0;background:#0b1015}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow:hidden}#map{position:fixed;inset:0}
+.hud{position:fixed;z-index:1000;top:max(10px,env(safe-area-inset-top));left:10px;right:10px;display:grid;grid-template-columns:repeat(4,1fr);gap:6px;pointer-events:none}.box{background:rgba(8,12,17,.78);color:white;border-radius:12px;padding:8px 5px;text-align:center}.lab{font-size:10px;letter-spacing:1px;color:#aeb7c2}.val{font-size:20px;font-weight:750}.unit{font-size:10px;color:#bdc5ce}
+.controls{position:fixed;z-index:1000;left:10px;right:10px;bottom:max(12px,env(safe-area-inset-bottom));display:flex;gap:8px}button{border:0;border-radius:14px;padding:12px 10px;font-size:14px;font-weight:750;background:rgba(8,12,17,.86);color:#fff}#gps{background:#087cff;flex:1.15}#center,#track,#radar{flex:1}#status{flex:1.05;font-size:11px}#radar.on{background:#087cff}.aircraft{font-size:28px;filter:drop-shadow(0 1px 2px white)}.leaflet-control-zoom{margin-top:90px!important}.notice{position:fixed;z-index:1000;top:84px;right:10px;background:rgba(255,255,255,.92);padding:7px 9px;border-radius:10px;font-size:11px}
+</style></head><body><div id="map"></div><div class="hud"><div class="box"><div class="lab">GS</div><div class="val" id="gs">--</div><div class="unit">kt</div></div><div class="box"><div class="lab">ALT GPS</div><div class="val" id="alt">--</div><div class="unit">ft</div></div><div class="box"><div class="lab">TRK</div><div class="val" id="trk">--</div><div class="unit">°</div></div><div class="box"><div class="lab">FLUGZEIT</div><div class="val" id="time">00:00</div><div class="unit">hh:mm</div></div></div><div class="notice">1 Finger: verschieben<br>2 Finger: zoomen</div><div class="controls"><button id="gps">📍 GPS START</button><button id="center">🎯 ZENTRIEREN</button><button id="track">〰 SPUR</button><button id="radar">🌧️ RADAR</button><button id="status">GPS gestoppt</button></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>
+const map=L.map('map',{zoomControl:true,tap:false,dragging:true,touchZoom:true}).setView([48.55,9.92],10);
+L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',{maxZoom:17,attribution:'© OpenStreetMap-Mitwirkende, SRTM | OpenTopoMap'}).addTo(map);
+
+/* Aktueller OpenFlightMaps-AERO-Layer.
+   OFM liefert 512px-Kacheln; Leaflet wird deshalb mit tileSize 512 + zoomOffset -1 konfiguriert.
+   "latest/aero/latest" verwendet den jeweils aktuellen OFM-Datenstand. */
+L.tileLayer('https://nwy-tiles-api.prod.newaydata.com/tiles/{z}/{x}/{y}.png?path=latest/aero/latest',{
+  minZoom:7,
+  maxZoom:17,
+  maxNativeZoom:17,
+  tileSize:512,
+  zoomOffset:-1,
+  opacity:1,
+  attribution:'© open flightmaps'
+}).addTo(map);
+
+let radarLayer=null,radarOn=false;
+async function loadRadar(){
+ const r=await fetch('https://api.rainviewer.com/public/weather-maps.json',{cache:'no-store'});
+ if(!r.ok)throw new Error('Radar API');
+ const d=await r.json(),frames=(d.radar&&d.radar.past)||[];
+ if(!frames.length)throw new Error('Keine Radardaten');
+ const f=frames[frames.length-1],host=d.host||'https://tilecache.rainviewer.com';
+ return L.tileLayer(host+f.path+'/256/{z}/{x}/{y}/2/1_1.png',{opacity:.58,maxNativeZoom:7,maxZoom:17,zIndex:500,attribution:'RainViewer'});
+}
+let watch=null,marker=null,firstFix=true,autoCenter=true,showTrack=true,start=null,timer=null,trail=[];let poly=L.polyline([],{weight:4,opacity:.8}).addTo(map);
+const icon=L.divIcon({className:'',html:'<div class="aircraft">✈️</div>',iconSize:[32,32],iconAnchor:[16,16]});const $=id=>document.getElementById(id);
+function fmt(){if(!start)return'00:00';let s=Math.floor((Date.now()-start)/1000),h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')}
+function startGps(){if(!navigator.geolocation){$('status').textContent='GPS nicht verfügbar';return}if(watch!==null)return;start=Date.now();timer=setInterval(()=>{$('time').textContent=fmt()},1000);$('status').textContent='GPS sucht…';$('gps').textContent='⏹ GPS STOP';watch=navigator.geolocation.watchPosition(p=>{const c=p.coords,ll=[c.latitude,c.longitude],k=c.speed==null?null:c.speed*1.943844;$('gs').textContent=k==null?'--':Math.round(k);$('alt').textContent=c.altitude==null?'--':Math.round(c.altitude*3.28084);$('trk').textContent=c.heading==null||isNaN(c.heading)?'--':Math.round(c.heading);$('status').textContent='GPS ±'+Math.round(c.accuracy)+' m';if(!marker)marker=L.marker(ll,{icon}).addTo(map);else marker.setLatLng(ll);if(showTrack){trail.push(ll);if(trail.length>3000)trail.shift();poly.setLatLngs(trail)}if(firstFix){map.setView(ll,13);firstFix=false}else if(autoCenter)map.panTo(ll,{animate:true})},e=>{$('status').textContent='GPS: '+e.message},{enableHighAccuracy:true,maximumAge:1000,timeout:15000})}
+function stopGps(){if(watch!==null)navigator.geolocation.clearWatch(watch);watch=null;clearInterval(timer);timer=null;$('gps').textContent='📍 GPS START';$('status').textContent='GPS gestoppt'}
+$('radar').onclick=async()=>{const b=$('radar');if(radarOn){if(radarLayer)map.removeLayer(radarLayer);radarOn=false;b.classList.remove('on');b.textContent='🌧️ RADAR';return}b.textContent='RADAR…';try{radarLayer=await loadRadar();radarLayer.addTo(map);radarOn=true;b.classList.add('on');b.textContent='🌧️ RADAR ✓'}catch(e){b.textContent='RADAR FEHLER';setTimeout(()=>b.textContent='🌧️ RADAR',1800)}};
+$('gps').onclick=()=>watch===null?startGps():stopGps();$('center').onclick=()=>{autoCenter=true;if(marker)map.setView(marker.getLatLng(),Math.max(map.getZoom(),13))};$('track').onclick=()=>{showTrack=!showTrack;poly.setStyle({opacity:showTrack?.8:0});$('track').textContent=showTrack?'〰 SPUR':'SPUR AUS'};map.on('dragstart zoomstart',()=>{autoCenter=false});
+</script></body></html>
