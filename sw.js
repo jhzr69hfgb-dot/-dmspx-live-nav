@@ -29,7 +29,7 @@ self.addEventListener('fetch',e=>{
 
         try{
           const online=await fetch(e.request);
-          if(online && online.ok){
+          if(online){
             cache.put(e.request,online.clone());
           }
           return online;
