@@ -1,8 +1,48 @@
-const CACHE='dmspx-live-nav-v1';
+const CACHE='dmspx-live-nav-v2';
 const CORE=['./','./index.html','./manifest.webmanifest'];
-self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(CORE)).then(()=>self.skipWaiting())));
-self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));
+
+self.addEventListener('install',e=>{
+  e.waitUntil(
+    caches.open(CACHE)
+      .then(c=>c.addAll(CORE))
+      .then(()=>self.skipWaiting())
+  );
+});
+
+self.addEventListener('activate',e=>{
+  e.waitUntil(self.clients.claim());
+});
+
 self.addEventListener('fetch',e=>{
   if(e.request.method!=='GET') return;
-  e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)));
+
+  const url=new URL(e.request.url);
+
+  const isMap=
+    url.hostname.includes('opentopomap.org') ||
+    url.hostname.includes('newaydata.com');
+
+  if(isMap){
+    e.respondWith(
+      caches.open(CACHE).then(async cache=>{
+        const saved=await cache.match(e.request);
+
+        try{
+          const online=await fetch(e.request);
+          if(online && online.ok){
+            cache.put(e.request,online.clone());
+          }
+          return online;
+        }catch(err){
+          if(saved) return saved;
+          throw err;
+        }
+      })
+    );
+    return;
+  }
+
+  e.respondWith(
+    fetch(e.request).catch(()=>caches.match(e.request))
+  );
 });
