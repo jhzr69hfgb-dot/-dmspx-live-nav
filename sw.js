@@ -1,4 +1,4 @@
-const CACHE='dmspx-live-nav-v3';
+const CACHE='dmspx-live-nav-v4';
 const CORE=['./','./index.html','./manifest.webmanifest'];
 
 self.addEventListener('install',e=>{
@@ -19,8 +19,9 @@ self.addEventListener('fetch',e=>{
   const url=new URL(e.request.url);
 
   const isMap=
-    url.hostname.includes('opentopomap.org') ||
-    url.hostname.includes('newaydata.com');
+  url.hostname.includes('opentopomap.org') ||
+  url.hostname.includes('newaydata.com') ||
+  url.hostname.includes('nwy-tiles-api.prod.newaydata.com');
 
   if(isMap){
     e.respondWith(
@@ -30,7 +31,7 @@ self.addEventListener('fetch',e=>{
         try{
           const online=await fetch(e.request);
           if(online && (online.ok || online.type==='opaque')){
-            cache.put(e.request,online.clone());
+            await cache.put(e.request,online.clone());
           }
           return online;
         }catch(err){
