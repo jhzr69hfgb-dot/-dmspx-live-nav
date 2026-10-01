@@ -29,7 +29,7 @@ self.addEventListener('fetch',e=>{
 
         try{
           const online=await fetch(e.request);
-          if(online){
+          if(online && (online.ok || online.type==='opaque')){
             cache.put(e.request,online.clone());
           }
           return online;
