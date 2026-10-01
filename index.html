@@ -40,4 +40,5 @@ function stopGps(){if(wakeLock){wakeLock.release();wakeLock=null;}if(watch!==nul
 $('radar').onclick=async()=>{const b=$('radar');if(radarOn){if(radarLayer)map.removeLayer(radarLayer);radarOn=false;b.classList.remove('on');b.textContent='🌧️ RADAR';return}b.textContent='RADAR…';try{radarLayer=await loadRadar();radarLayer.addTo(map);radarOn=true;b.classList.add('on');b.textContent='🌧️ RADAR ✓'}catch(e){b.textContent='RADAR FEHLER';setTimeout(()=>b.textContent='🌧️ RADAR',1800)}};
 $('gps').onclick=()=>watch===null?startGps():stopGps();
 $('center').onclick=()=>{autoCenter=true;if(marker)map.setView(marker.getLatLng(),Math.max(map.getZoom(),13))};$('track').onclick=()=>{showTrack=!showTrack;poly.setStyle({opacity:showTrack? .8:0});$('track').textContent=showTrack?'〰 SPUR':'SPUR AUS'};map.on('dragstart zoomstart',()=>{autoCenter=false});
+if('serviceWorker' in navigator){navigator.serviceWorker.register('./sw.js');}
 </script></body></html>
